@@ -6,9 +6,14 @@ const INSTA_CHANNEL_ID = '832881742251032576';
 // Matches instagram.com/p/, /reel/, and /tv/ links.
 const INSTA_LINK_REGEX = /https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[^\s]+/g;
 
-// Source we scrape OG tags from server-side — never posted as visible text.
-function toEmbedSourceLink(url) {
-  return url.replace(/(?:www\.)?instagram\.com/i, 'zzinstagram.com');
+// Mirror domains of the InstaFix embed-fix service, tried in order.
+// ddinstagram.com is the main one; the others are known fallback mirrors
+// used when the primary is rate-limited or flaky.
+const EMBED_MIRRORS = ['ddinstagram.com', 'kkinstagram.com', 'instagramez.com'];
+
+// Source(s) we scrape OG tags from server-side — never posted as visible text.
+function toEmbedSourceLinks(url) {
+  return EMBED_MIRRORS.map(mirror => url.replace(/(?:www\.)?instagram\.com/i, mirror));
 }
 
 // Builds the embed(s) for one post. Photos/carousels use Discord's
@@ -47,8 +52,20 @@ module.exports = {
 
     for (const link of uniqueLinks) {
       try {
-        const data = await fetchInstaEmbed(toEmbedSourceLink(link));
-        if (!data) continue;
+        let data = null;
+        for (const sourceUrl of toEmbedSourceLinks(link)) {
+          try {
+            data = await fetchInstaEmbed(sourceUrl);
+          } catch (mirrorErr) {
+            console.error(`insta watcher mirror failed (${sourceUrl}):`, mirrorErr.message);
+          }
+          if (data) break;
+        }
+
+        if (!data) {
+          console.error(`insta watcher: no OG data found for ${link} across all mirrors`);
+          continue;
+        }
 
         const embeds = buildEmbeds(data, link);
         if (embeds.length) {
