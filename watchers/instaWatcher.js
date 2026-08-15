@@ -1,79 +1,71 @@
-const { EmbedBuilder } = require('discord.js');
-const fetchInstaEmbed = require('../utils/fetchInstaEmbed');
+// Fetches an embed-fix mirror page (e.g. ddinstagram.com) server-side and
+// pulls the Open Graph media tags out of the HTML ourselves, so the bot can
+// build its own Discord embed instead of relying on Discord's automatic
+// link unfurler. This means the mirror URL never has to appear as visible,
+// clickable plain text in the channel.
+//
+// IMPORTANT: these embed-fix services only serve the "fixed" HTML (with
+// og:image/og:video tags) to requests whose User-Agent matches Discord's
+// real crawler. Anything else gets redirected straight to instagram.com,
+// which has no scrapable data without a logged-in session. The string
+// below must match Discord's actual crawler UA exactly.
+const USER_AGENT =
+  'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)';
 
-const INSTA_CHANNEL_ID = '832881742251032576';
-
-// Matches instagram.com/p/, /reel/, and /tv/ links.
-const INSTA_LINK_REGEX = /https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[^\s]+/g;
-
-// Mirror domains of the InstaFix embed-fix service, tried in order.
-// ddinstagram.com is the main one; the others are known fallback mirrors
-// used when the primary is rate-limited or flaky.
-const EMBED_MIRRORS = ['ddinstagram.com', 'kkinstagram.com', 'instagramez.com'];
-
-// Source(s) we scrape OG tags from server-side — never posted as visible text.
-function toEmbedSourceLinks(url) {
-  return EMBED_MIRRORS.map(mirror => url.replace(/(?:www\.)?instagram\.com/i, mirror));
+function extractMetaTags(html) {
+  const tags = html.match(/<meta[^>]*>/gi) || [];
+  return tags
+    .map(tag => {
+      const property = tag.match(/property=["']([^"']+)["']/i);
+      const content = tag.match(/content=["']([^"']*)["']/i);
+      if (!property || !content) return null;
+      return { property: property[1].toLowerCase(), content: content[1] };
+    })
+    .filter(Boolean);
 }
 
-// Builds the embed(s) for one post. Photos/carousels use Discord's
-// same-URL grouping trick to render as a single gallery; videos get a
-// thumbnail plus a masked watch link since bots can't post playable
-// inline video the way Discord's own crawler can.
-function buildEmbeds(data, originalLink) {
-  const embeds = [];
-
-  if (data.video) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setURL(originalLink);
-    if (data.images[0]) embed.setImage(data.images[0]);
-    embed.setDescription(`[▶ Watch video](${data.video})`);
-    embeds.push(embed);
-    return embeds;
-  }
-
-  const images = data.images.slice(0, 10);
-  images.forEach((img, i) => {
-    // Same .setURL on every embed groups them into one gallery view.
-    const embed = new EmbedBuilder().setColor(0x5865F2).setURL(originalLink).setImage(img);
-    embeds.push(embed);
+module.exports = async function fetchInstaEmbed(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT },
+    redirect: 'follow'
   });
 
-  return embeds;
-}
-
-module.exports = {
-  async execute(msg) {
-    if (msg.channel.id !== INSTA_CHANNEL_ID) return;
-
-    const matches = msg.content.match(INSTA_LINK_REGEX);
-    if (!matches || !matches.length) return;
-
-    const uniqueLinks = [...new Set(matches)];
-
-    for (const link of uniqueLinks) {
-      try {
-        let data = null;
-        for (const sourceUrl of toEmbedSourceLinks(link)) {
-          try {
-            data = await fetchInstaEmbed(sourceUrl);
-          } catch (mirrorErr) {
-            console.error(`insta watcher mirror failed (${sourceUrl}):`, mirrorErr.message);
-          }
-          if (data) break;
-        }
-
-        if (!data) {
-          console.error(`insta watcher: no OG data found for ${link} across all mirrors`);
-          continue;
-        }
-
-        const embeds = buildEmbeds(data, link);
-        if (embeds.length) {
-          await msg.reply({ embeds, allowedMentions: { repliedUser: false } });
-        }
-      } catch (err) {
-        console.error('insta watcher error:', err);
-      }
-    }
+  if (!res.ok) {
+    console.error(`fetchInstaEmbed: ${url} -> HTTP ${res.status}`);
+    return null;
   }
+
+  // If the final URL landed back on instagram.com, the mirror redirected
+  // us instead of serving fixed OG tags — usually a User-Agent mismatch
+  // or the post genuinely being unavailable via that mirror.
+  if (/(?:^|\/\/)(?:www\.)?instagram\.com/i.test(res.url)) {
+    console.error(`fetchInstaEmbed: ${url} redirected to ${res.url}, no fixed data available`);
+    return null;
+  }
+
+  const html = await res.text();
+  const meta = extractMetaTags(html);
+
+  const images = meta
+    .filter(m => m.property === 'og:image')
+    .map(m => m.content);
+
+  const video = meta.find(
+    m => m.property === 'og:video' || m.property === 'og:video:secure_url'
+  );
+
+  const title = meta.find(m => m.property === 'og:title');
+  const description = meta.find(m => m.property === 'og:description');
+
+  if (!images.length && !video) {
+    console.error(`fetchInstaEmbed: ${url} returned HTML with no og:image/og:video tags`);
+    return null;
+  }
+
+  return {
+    images,
+    video: video ? video.content : null,
+    title: title ? title.content : null,
+    description: description ? description.content : null
+  };
 };
