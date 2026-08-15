@@ -1,4 +1,4 @@
-const INSTA_CHANNEL_ID = '832881742251032576';
+const watchedChannels = require('../utils/watchedChannels');
 
 // Matches instagram.com/p/, /reel/, and /tv/ links.
 const INSTA_LINK_REGEX = /https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[^\s]+/g;
@@ -14,7 +14,7 @@ function toEmbedLink(url) {
 
 module.exports = {
   async execute(msg) {
-    if (msg.channel.id !== INSTA_CHANNEL_ID) return;
+    if (!watchedChannels.isWatched(msg.channel.id)) return;
 
     const matches = msg.content.match(INSTA_LINK_REGEX);
     if (!matches || !matches.length) return;
