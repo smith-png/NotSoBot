@@ -1,11 +1,16 @@
-// Fetches a zzinstagram.com page server-side and pulls the Open Graph
-// media tags out of the HTML ourselves, so the bot can build its own
-// Discord embed instead of relying on Discord's automatic link unfurler.
-// This means the zzinstagram.com URL never has to appear as visible,
+// Fetches an embed-fix mirror page (e.g. ddinstagram.com) server-side and
+// pulls the Open Graph media tags out of the HTML ourselves, so the bot can
+// build its own Discord embed instead of relying on Discord's automatic
+// link unfurler. This means the mirror URL never has to appear as visible,
 // clickable plain text in the channel.
-
+//
+// IMPORTANT: these embed-fix services only serve the "fixed" HTML (with
+// og:image/og:video tags) to requests whose User-Agent matches Discord's
+// real crawler. Anything else gets redirected straight to instagram.com,
+// which has no scrapable data without a logged-in session. The string
+// below must match Discord's actual crawler UA exactly.
 const USER_AGENT =
-  'Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discordapp.com)';
+  'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)';
 
 function extractMetaTags(html) {
   const tags = html.match(/<meta[^>]*>/gi) || [];
@@ -24,7 +29,19 @@ module.exports = async function fetchInstaEmbed(url) {
     headers: { 'User-Agent': USER_AGENT },
     redirect: 'follow'
   });
-  if (!res.ok) return null;
+
+  if (!res.ok) {
+    console.error(`fetchInstaEmbed: ${url} -> HTTP ${res.status}`);
+    return null;
+  }
+
+  // If the final URL landed back on instagram.com, the mirror redirected
+  // us instead of serving fixed OG tags — usually a User-Agent mismatch
+  // or the post genuinely being unavailable via that mirror.
+  if (/(?:^|\/\/)(?:www\.)?instagram\.com/i.test(res.url)) {
+    console.error(`fetchInstaEmbed: ${url} redirected to ${res.url}, no fixed data available`);
+    return null;
+  }
 
   const html = await res.text();
   const meta = extractMetaTags(html);
@@ -40,7 +57,10 @@ module.exports = async function fetchInstaEmbed(url) {
   const title = meta.find(m => m.property === 'og:title');
   const description = meta.find(m => m.property === 'og:description');
 
-  if (!images.length && !video) return null;
+  if (!images.length && !video) {
+    console.error(`fetchInstaEmbed: ${url} returned HTML with no og:image/og:video tags`);
+    return null;
+  }
 
   return {
     images,
