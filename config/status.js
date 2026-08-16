@@ -1,4 +1,4 @@
 module.exports = {
-  text: 'with your emotions',
+  text: 'With Your Mom',
   type: 'PLAYING' // PLAYING, WATCHING, LISTENING, COMPETING
 };
