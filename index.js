@@ -2,12 +2,15 @@ const { Client, GatewayIntentBits, Collection, ActivityType } = require('discord
 const fs = require('fs');
 const path = require('path');
 const statusConfig = require('./config/status.js');
+const connectDB = require('./db/connection');
+const { handleYearButton } = require('./handlers/buttonHandler');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
@@ -63,4 +66,15 @@ client.on('messageCreate', async msg => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.on('interactionCreate', async (interaction) => {
+  try {
+    await handleYearButton(interaction);
+  } catch (err) {
+    console.error('[button] Error:', err);
+  }
+});
+
+(async () => {
+  await connectDB();
+  await client.login(process.env.DISCORD_TOKEN);
+})();
