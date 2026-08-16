@@ -14,9 +14,7 @@ module.exports = {
 
   // Discord role IDs allowed to run admin commands (setyear, cooldown set/reset, exportyears)
   staffRoleIds: [
-    'ROLE_ID_GS',
-    'ROLE_ID_IT_DEPT',
-    'ROLE_ID_MODERATOR',
+    '1538506389008285717',
   ],
 
   // Default cooldown in minutes, used only if not yet set in DB
