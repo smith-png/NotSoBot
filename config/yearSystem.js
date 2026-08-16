@@ -6,10 +6,10 @@ module.exports = {
 
   // Map of year label -> Discord role ID
   yearRoles: {
-    '1st': 'ROLE_ID_1ST_YEAR',
-    '2nd': 'ROLE_ID_2ND_YEAR',
-    '3rd': 'ROLE_ID_3RD_YEAR',
-    '4th': 'ROLE_ID_4TH_YEAR',
+    '1st': '1538439430610747473',
+    '2nd': '1538439479696826420',
+    '3rd': '1538439523497672775',
+    '4th': '1538439565008834560',
   },
 
   // Discord role IDs allowed to run admin commands (setyear, cooldown set/reset, exportyears)
