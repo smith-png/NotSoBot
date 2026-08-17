@@ -5,7 +5,9 @@ const UserYear = require('../db/models/UserYear');
 
 module.exports = {
   name: 'exportyears',
-  description: 'Exports all registered users and their years to an Excel sheet. Staff only.',
+  description: 'Exports all registered users and their years to an Excel sheet.',
+  usage: '!exportyears',
+  access: 'Staff',
   async execute(message, args) {
     if (!isStaff(message.member)) {
       await message.reply("You don't have permission to use this command.");
