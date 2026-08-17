@@ -3,7 +3,9 @@ const { getCooldownMinutes, setCooldownMinutes, resetCooldown } = require('../ut
 
 module.exports = {
   name: 'cooldown',
-  description: '!cooldown status | !cooldown set <minutes> | !cooldown reset @user',
+  description: 'Checks or manages the self-serve year-change cooldown window.',
+  usage: '!cooldown status | !cooldown set <minutes> | !cooldown reset @user',
+  access: 'status: Everyone · set/reset: Staff',
   async execute(message, args) {
     const sub = args[0]?.toLowerCase();
 
