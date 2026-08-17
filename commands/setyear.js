@@ -6,7 +6,9 @@ const YEAR_LABELS = { '1st': '1st Year', '2nd': '2nd Year', '3rd': '3rd Year', '
 
 module.exports = {
   name: 'setyear',
-  description: '!setyear @user <1st|2nd|3rd|4th> — admin override, bypasses cooldown. Staff only.',
+  description: 'Admin override — sets a member\'s year directly, bypassing cooldown.',
+  usage: '!setyear @user <1st|2nd|3rd|4th>',
+  access: 'Staff',
   async execute(message, args) {
     if (!isStaff(message.member)) {
       await message.reply("You don't have permission to use this command.");
