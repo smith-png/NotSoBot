@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const statusConfig = require('./config/status.js');
 const connectDB = require('./db/connection');
-const { handleYearButton } = require('./handlers/buttonHandler');
+const { handleInteraction } = require('./handlers/interactionRouter');
 
 const client = new Client({
   intents: [
@@ -68,9 +68,9 @@ client.on('messageCreate', async msg => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    await handleYearButton(interaction);
+    await handleInteraction(interaction);
   } catch (err) {
-    console.error('[button] Error:', err);
+    console.error('[interaction] Error:', err);
   }
 });
 
