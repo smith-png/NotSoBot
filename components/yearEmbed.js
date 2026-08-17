@@ -13,10 +13,26 @@ function buildYearEmbed() {
     .setColor(0x2b2d31);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('yearselect_1st').setLabel('1st Year').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('yearselect_2nd').setLabel('2nd Year').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('yearselect_3rd').setLabel('3rd Year').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('yearselect_4th').setLabel('4th Year').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder()
+      .setCustomId('yearselect_1st')
+      .setLabel('1st Year')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji({ id: '1538514039385358376', name: 'one' }),
+    new ButtonBuilder()
+      .setCustomId('yearselect_2nd')
+      .setLabel('2nd Year')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji({ id: '1538513902223237140', name: 'two' }),
+    new ButtonBuilder()
+      .setCustomId('yearselect_3rd')
+      .setLabel('3rd Year')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji({ id: '1538513759478358139', name: 'three' }),
+    new ButtonBuilder()
+      .setCustomId('yearselect_4th')
+      .setLabel('4th Year')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji({ id: '1538513603081281649', name: 'four' })
   );
 
   return { embeds: [embed], components: [row] };
