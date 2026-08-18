@@ -3,7 +3,7 @@
 module.exports = {
   // Channel where users must post the source image before running !st add.
   // Fill in the real #stickers-archive channel ID.
-  archiveChannelId: process.env.STICKER_ARCHIVE_CHANNEL_ID || 'CHANNEL_ID_HERE',
+  archiveChannelId: process.env.STICKER_ARCHIVE_CHANNEL_ID || '1538894115364671579',
 
   // Hard cap per user, enforced server-side (not just documented).
   maxStickersPerUser: 69,
