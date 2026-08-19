@@ -16,7 +16,7 @@ module.exports = {
   name: 'st',
   description: 'Personal sticker collection — save images and reuse them anywhere in the server.',
   usage: '!st add {name} | !st {name} | !st collection | !st delete {name} | !st rename {old} {new} | !st steal {name}',
-  access: 'Everyone (add/steal require the archive channel; delete/list for others requires Staff)',
+  access: 'Everyone (steal works in any channel; delete works on anyone\'s sticker; list for others requires Staff)',
   category: 'Stickers',
 
   async execute(msg, args, client) {
@@ -32,8 +32,8 @@ module.exports = {
       if (sub === 'delete') return await handleDelete(msg, args);
       if (sub === 'rename') return await handleRename(msg, args);
       if (sub === 'steal') return await handleSteal(msg, args);
-      if (sub === 'collection') return await handleCollection(msg);
-      if (sub === 'list') return await handleList(msg);
+      if (sub === 'collection') return await handleCollection(msg, args, client);
+      if (sub === 'list') return await handleList(msg, args, client);
 
       // Anything else is treated as "send this sticker by name".
       const name = args[0];
@@ -42,7 +42,7 @@ module.exports = {
           embeds: [
             errorEmbed(
               'Usage:\n' +
-                '`!st add {name}` — reply to an image in the archive channel\n' +
+                '`!st add {name}` — attach an image, or reply to one\n' +
                 '`!st {name}` — send a saved sticker\n' +
                 '`!st collection` — list your stickers\n' +
                 '`!st delete {name}` / `!st rename {old} {new}` / `!st steal {name}`'
