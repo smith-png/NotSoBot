@@ -20,7 +20,19 @@ module.exports = {
   // with `!st {name}`.
   reservedNames: ['add', 'delete', 'rename', 'steal', 'collection', 'list', 'help'],
 
-  // How long to leave the confirmation embed up before cleaning up the
-  // invocation + confirmation messages after a successful !st add.
-  cleanupDelayMs: 30 * 1000,
+  // How many stickers to show per page in the paginated collection embed.
+  collectionPageSize: 10,
+
+  // Discord's standard sticker canvas size (px). Appended as a `size`
+  // query param to every sticker image URL we post so previews render at
+  // a consistent, predictable resolution regardless of the original
+  // upload's dimensions.
+  stickerImageSize: 320,
+
+  // How long the bot's own replies (confirmations, errors, reminders)
+  // stay visible in the archive channel before being swept — the archive
+  // channel is kept clean of everything except valid command invocations
+  // and image/gif sources, and the bot's own messages never qualify to
+  // stay.
+  archiveBotMessageLifetimeMs: 5 * 1000,
 };
