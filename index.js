@@ -5,6 +5,8 @@ const statusConfig = require('./config/status.js');
 const connectDB = require('./db/connection');
 const { handleInteraction } = require('./handlers/interactionRouter');
 const { errorEmbed } = require('./utils/embedReplies');
+const stickersConfig = require('./config/stickers');
+const { sweepArchiveMessage } = require('./utils/archiveCleanup');
 
 const client = new Client({
   intents: [
@@ -50,6 +52,14 @@ client.once('ready', () => {
 
 client.on('messageCreate', async msg => {
   if (msg.author.bot) return;
+
+  // Keep the sticker archive channel clean: anything that isn't a
+  // recognized command or an image/gif gets removed immediately.
+  // Runs before dispatch, so a valid `!st add` invocation is never
+  // deleted out from under itself.
+  if (msg.channel.id === stickersConfig.archiveChannelId) {
+    await sweepArchiveMessage(msg, client);
+  }
 
   for (const watcher of client.watchers) watcher.execute(msg, client);
 
