@@ -18,21 +18,35 @@ async function resolveStickerAttachment(client, sticker) {
 }
 
 /**
- * Appends (or overwrites) Discord's `size` query param on a CDN
- * attachment URL so every sticker link we post resizes to Discord's
- * standard sticker canvas, regardless of the original upload's actual
- * dimensions. Uses the URL API rather than string concatenation so it
- * doesn't break on attachment URLs that already carry signed query
- * params (Discord's newer CDN links include `ex`/`is`/`hm` signature
- * params that must be preserved).
+ * Builds a resized image URL for a sticker attachment, standardized to
+ * Discord's sticker canvas size.
+ *
+ * Important: the `size` query param only works on Discord's *asset*
+ * CDN endpoints (avatars, emojis, guild icons) — raw message-attachment
+ * links under cdn.discordapp.com don't support it at all; Discord just
+ * ignores/strips it, which is why links posted this way never showed a
+ * `size` param. Resizing an arbitrary attachment requires going through
+ * Discord's image proxy instead (media.discordapp.net), using width/
+ * height query params. discord.js exposes that proxy URL directly as
+ * `attachment.proxyURL`, so we use that as the base rather than
+ * `attachment.url`.
+ *
+ * We only constrain `width`, not both width and height — Discord's
+ * proxy scales the other dimension proportionally when only one is
+ * given. Setting both forces a hard square crop/stretch, which would
+ * distort any sticker that isn't already square. This matches how
+ * Discord's own native stickers behave too: a 320x320 canvas, but the
+ * artwork itself keeps its aspect ratio rather than being stretched to
+ * fill it.
  */
-function withStickerSize(url) {
+function withStickerSize(attachment) {
+  const base = attachment?.proxyURL || attachment?.url;
   try {
-    const parsed = new URL(url);
-    parsed.searchParams.set('size', String(stickerImageSize));
+    const parsed = new URL(base);
+    parsed.searchParams.set('width', String(stickerImageSize));
     return parsed.toString();
   } catch {
-    return url;
+    return attachment?.url;
   }
 }
 
