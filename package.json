@@ -5,6 +5,7 @@
   "dependencies": {
     "discord.js": "^14.14.1",
     "mongoose": "^8.0.0",
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
+    "jimp": "^1.6.1"
   }
 }
