@@ -2,21 +2,20 @@ const {
   handleAdd,
   handleDelete,
   handleRename,
-  handleSteal,
   handleCollection,
-  handleList,
+  handleSetCap,
   handleSend,
 } = require('../handlers/stickerHandler');
 const { isValidStickerName, isReservedName } = require('../utils/stickerValidation');
 const { errorEmbed } = require('../utils/embedReplies');
 
-const SUBCOMMANDS = new Set(['add', 'delete', 'rename', 'steal', 'collection', 'list']);
+const SUBCOMMANDS = new Set(['add', 'delete', 'rename', 'collection', 'setcap']);
 
 module.exports = {
   name: 'st',
-  description: 'Personal sticker collection — save images and reuse them anywhere in the server.',
-  usage: '!st add {name} | !st {name} | !st collection | !st delete {name} | !st rename {old} {new} | !st steal {name}',
-  access: 'Everyone (steal works in any channel; delete works on anyone\'s sticker; list for others requires Staff)',
+  description: 'Server sticker library — anyone can add a sticker and anyone can use one.',
+  usage: '!st add {name} | !st {name} | !st collection [@user] | !st delete {name} | !st rename {old} {new} | !st setcap {number}',
+  access: 'Everyone (add/send/collection); delete/rename require the creator or Staff; setcap requires Staff',
   category: 'Stickers',
 
   async execute(msg, args, client) {
@@ -31,9 +30,8 @@ module.exports = {
       if (sub === 'add') return await handleAdd(msg, args);
       if (sub === 'delete') return await handleDelete(msg, args);
       if (sub === 'rename') return await handleRename(msg, args);
-      if (sub === 'steal') return await handleSteal(msg, args);
       if (sub === 'collection') return await handleCollection(msg, args, client);
-      if (sub === 'list') return await handleList(msg, args, client);
+      if (sub === 'setcap') return await handleSetCap(msg, args);
 
       // Anything else is treated as "send this sticker by name".
       const name = args[0];
@@ -42,10 +40,10 @@ module.exports = {
           embeds: [
             errorEmbed(
               'Usage:\n' +
-                '`!st add {name}` — attach an image, or reply to one\n' +
-                '`!st {name}` — send a saved sticker\n' +
-                '`!st collection` — list your stickers\n' +
-                '`!st delete {name}` / `!st rename {old} {new}` / `!st steal {name}`'
+                '`!st add {name}` — attach an image/gif, paste a link, or reply to one\n' +
+                '`!st {name}` — send any sticker in the server\n' +
+                '`!st collection [@user]` — see who created what\n' +
+                '`!st delete {name}` / `!st rename {old} {new}` — creator or Staff only'
             ),
           ],
         });
