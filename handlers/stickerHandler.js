@@ -1,11 +1,13 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const Sticker = require('../db/models/Sticker');
-const StickerLog = require('../db/models/StickerLog');
 const config = require('../config/stickers');
 const { isStaff } = require('../utils/isStaff');
 const { isValidStickerName, isReservedName, isAllowedAttachment } = require('../utils/stickerValidation');
 const { checkStickerCooldown, markStickerUsed } = require('../utils/stickerCooldown');
-const { resolveStickerAttachment, withStickerSize } = require('../utils/stickerSource');
+const { resolveStickerAttachment } = require('../utils/stickerSource');
+const { buildArchivePost } = require('../utils/stickerImage');
+const { extractStickerSource } = require('../utils/stickerSourceExtract');
+const { getStickerCap, setStickerCap } = require('../utils/stickerCap');
 const { scheduleArchiveBotMessageSweep } = require('../utils/archiveCleanup');
 const { brandColor: BRAND_COLOR } = require('../config/theme');
 const { errorEmbed, staffEmbed } = require('../utils/embedReplies');
@@ -19,23 +21,12 @@ function nameError(name) {
   return null;
 }
 
-// --- !st add {name} ---------------------------------------------------
+// --- !st add {name} ------------------------------------------------------
+// Stickers are usable by anyone in the guild, so this can be run from
+// anywhere — the bot always ends up posting its own permanent copy into
+// the archive channel regardless of where the command was invoked.
 async function handleAdd(msg, args) {
   const inArchiveChannel = msg.channel.id === config.archiveChannelId;
-
-  // Command still runs anywhere — this is just a nudge, not a gate. The
-  // reminder is sent in the invocation channel and is never swept, so
-  // it stays visible (unlike the archive-channel cleanup below, which
-  // only ever applies inside the archive channel itself).
-  if (!inArchiveChannel) {
-    await msg.channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(BRAND_COLOR)
-          .setDescription(`💡 Tip: run \`!st add\` in <#${config.archiveChannelId}> so the source image sticks around long-term.`),
-      ],
-    });
-  }
 
   const name = args[1];
   const err = nameError(name);
@@ -45,36 +36,23 @@ async function handleAdd(msg, args) {
     return;
   }
 
-  // Prefer an image attached directly to this message. Falls back to
-  // replying to a message that has one, so both flows work:
-  //   !st add {name}          (image attached right here)
-  //   [reply to an image] !st add {name}
-  let sourceMessage = msg;
-  let attachment = msg.attachments.first();
-
-  if (!attachment) {
-    if (!msg.reference) {
-      const sent = await msg.reply({
-        embeds: [errorEmbed('Attach the image to this message, or reply to a message that has one, with `!st add {name}`.')],
-      });
-      scheduleArchiveBotMessageSweep(sent);
-      return;
-    }
-
-    sourceMessage = await msg.channel.messages.fetch(msg.reference.messageId).catch(() => null);
-    if (!sourceMessage) {
-      const sent = await msg.reply({ embeds: [errorEmbed("Couldn't find the message you replied to — it may have been deleted.")] });
-      scheduleArchiveBotMessageSweep(sent);
-      return;
-    }
-
-    attachment = sourceMessage.attachments.first();
-    if (!attachment) {
-      const sent = await msg.reply({ embeds: [errorEmbed('That message has no image attached.')] });
-      scheduleArchiveBotMessageSweep(sent);
-      return;
-    }
+  // Checks (in order): an attachment on this message, a direct image/gif
+  // link in the message text, a Tenor/Giphy share link in the message
+  // text, or — as a fallback — an attachment on whatever was replied to.
+  const source = await extractStickerSource(msg);
+  if (!source) {
+    const sent = await msg.reply({
+      embeds: [
+        errorEmbed(
+          'No image found. Attach one, paste a direct image/gif link or a Tenor/Giphy link, or reply to a message that has one — with `!st add {name}`.'
+        ),
+      ],
+    });
+    scheduleArchiveBotMessageSweep(sent);
+    return;
   }
+
+  const { attachment } = source;
 
   if (!isAllowedAttachment(attachment)) {
     const sent = await msg.reply({
@@ -90,14 +68,46 @@ async function handleAdd(msg, args) {
     return;
   }
 
+  const cap = await getStickerCap(msg.guild.id);
   const count = await Sticker.countDocuments({ ownerId: msg.author.id, guildId: msg.guild.id });
-  if (count >= config.maxStickersPerUser) {
+  if (count >= cap) {
     const sent = await msg.reply({
-      embeds: [errorEmbed(`You've hit the ${config.maxStickersPerUser}-sticker limit. Delete one first with \`!st delete {name}\`.`)],
+      embeds: [errorEmbed(`You've hit the ${cap}-sticker limit. Delete one first with \`!st delete {name}\`.`)],
     });
     scheduleArchiveBotMessageSweep(sent);
     return;
   }
+
+  // Download + (for static images) resize the source now, once, and
+  // post the bot's own permanent copy into the archive channel. The
+  // sticker's stored reference points at THIS post from here on, not
+  // wherever the user originally attached/linked the image — so it
+  // survives independently of the original message.
+  let archiveFile;
+  try {
+    archiveFile = await buildArchivePost(attachment);
+  } catch (e) {
+    const sent = await msg.reply({ embeds: [errorEmbed("Couldn't download that image — check the link/attachment and try again.")] });
+    scheduleArchiveBotMessageSweep(sent);
+    return;
+  }
+
+  const archiveChannel = await msg.client.channels.fetch(config.archiveChannelId).catch(() => null);
+  if (!archiveChannel) {
+    const sent = await msg.reply({ embeds: [errorEmbed('The sticker archive channel is missing or inaccessible — let staff know.')] });
+    scheduleArchiveBotMessageSweep(sent);
+    return;
+  }
+
+  const archivePost = await archiveChannel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setDescription(`🏷️ \`${name}\` — added by ${msg.author}`)
+        .setImage(`attachment://${archiveFile.name}`),
+    ],
+    files: [archiveFile],
+  });
 
   let sticker;
   try {
@@ -106,18 +116,16 @@ async function handleAdd(msg, args) {
       guildId: msg.guild.id,
       nameDisplay: name,
       nameLower: name.toLowerCase(),
-      sourceChannelId: sourceMessage.channel.id,
-      sourceMessageId: sourceMessage.id,
-      // Keyed off the attachment's own snowflake ID rather than object
-      // reference/array position — more robust if attachments are ever
-      // re-ordered or re-fetched.
-      attachmentIndex: [...sourceMessage.attachments.keys()].indexOf(attachment.id),
+      sourceChannelId: archivePost.channel.id,
+      sourceMessageId: archivePost.id,
+      attachmentIndex: 0,
     });
   } catch (e) {
+    // Roll back the archive post so a failed add doesn't leave an
+    // orphaned image behind with nothing pointing at it.
+    await archivePost.delete().catch(() => {});
     if (e.code === 11000) {
-      const sent = await msg.reply({
-        embeds: [errorEmbed(`You already have a sticker named \`${name}\`. Pick a different name or \`!st rename\` the old one.`)],
-      });
+      const sent = await msg.reply({ embeds: [errorEmbed(`\`${name}\` is already taken by another sticker in this server. Try a different name.`)] });
       scheduleArchiveBotMessageSweep(sent);
       return;
     }
@@ -128,51 +136,43 @@ async function handleAdd(msg, args) {
     embeds: [
       new EmbedBuilder()
         .setColor(BRAND_COLOR)
-        .setDescription(`✅ Saved as \`${sticker.nameDisplay}\`. Use it with \`!st ${sticker.nameDisplay}\`.`),
+        .setDescription(`✅ Saved as \`${sticker.nameDisplay}\`. Anyone can use it with \`!st ${sticker.nameDisplay}\`.`),
     ],
   });
 
-  // We never delete the invocation message ourselves — the archive-
-  // channel sweep (index.js) already keeps it if it's a valid command
-  // or carries an image, and outside the archive channel there's
-  // nothing to clean up. We do, however, always sweep our own
-  // confirmation out of the archive channel — it doesn't carry an
-  // image/gif itself, so it never earns a permanent place there.
-  scheduleArchiveBotMessageSweep(confirmation);
+  // Only relevant if the command happened to be invoked in the archive
+  // channel itself — sweep our own confirmation out so it doesn't sit
+  // next to the permanent archive post.
+  if (inArchiveChannel) scheduleArchiveBotMessageSweep(confirmation);
 }
 
-// --- !st delete {name} [!st delete @user {name}] -----------------------
-// Open to everyone — anyone can delete anyone's sticker, not just staff.
+// --- !st delete {name} ----------------------------------------------------
+// Creator or staff only.
 async function handleDelete(msg, args) {
-  let ownerId = msg.author.id;
-  let name = args[1];
-
-  const mentioned = msg.mentions.users.first();
-  if (mentioned) {
-    ownerId = mentioned.id;
-    name = args[2];
-  }
+  const name = args[1];
 
   if (!name) {
     await msg.reply({ embeds: [errorEmbed('Usage: `!st delete {name}`')] });
     return;
   }
 
-  const deleted = await Sticker.findOneAndDelete({
-    ownerId,
-    guildId: msg.guild.id,
-    nameLower: name.toLowerCase(),
-  });
-
-  if (!deleted) {
+  const sticker = await Sticker.findOne({ guildId: msg.guild.id, nameLower: name.toLowerCase() });
+  if (!sticker) {
     await msg.reply({ embeds: [errorEmbed(`No sticker named \`${name}\` found.`)] });
     return;
   }
 
-  await msg.reply(`🗑️ Deleted \`${deleted.nameDisplay}\`.`);
+  if (sticker.ownerId !== msg.author.id && !isStaff(msg.member)) {
+    await msg.reply({ embeds: [staffEmbed("You don't have permission to delete this sticker — only its creator or staff can.")] });
+    return;
+  }
+
+  await Sticker.deleteOne({ _id: sticker._id });
+  await msg.reply(`🗑️ Deleted \`${sticker.nameDisplay}\`.`);
 }
 
-// --- !st rename {old} {new} --------------------------------------------
+// --- !st rename {old} {new} -----------------------------------------------
+// Creator or staff only.
 async function handleRename(msg, args) {
   const oldName = args[1];
   const newName = args[2];
@@ -188,9 +188,14 @@ async function handleRename(msg, args) {
     return;
   }
 
-  const sticker = await Sticker.findOne({ ownerId: msg.author.id, guildId: msg.guild.id, nameLower: oldName.toLowerCase() });
+  const sticker = await Sticker.findOne({ guildId: msg.guild.id, nameLower: oldName.toLowerCase() });
   if (!sticker) {
     await msg.reply({ embeds: [errorEmbed(`No sticker named \`${oldName}\` found.`)] });
+    return;
+  }
+
+  if (sticker.ownerId !== msg.author.id && !isStaff(msg.member)) {
+    await msg.reply({ embeds: [staffEmbed("You don't have permission to rename this sticker — only its creator or staff can.")] });
     return;
   }
 
@@ -201,7 +206,7 @@ async function handleRename(msg, args) {
     await sticker.save();
   } catch (e) {
     if (e.code === 11000) {
-      await msg.reply({ embeds: [errorEmbed(`You already have a sticker named \`${newName}\`.`)] });
+      await msg.reply({ embeds: [errorEmbed(`\`${newName}\` is already taken by another sticker in this server.`)] });
       return;
     }
     throw e;
@@ -210,80 +215,21 @@ async function handleRename(msg, args) {
   await msg.reply(`✏️ Renamed \`${oldName}\` to \`${newName}\`.`);
 }
 
-// --- !st steal [name] ---------------------------------------------------
-async function handleSteal(msg, args) {
-  if (!msg.reference) {
-    await msg.reply({ embeds: [errorEmbed('Reply to a message the bot sent containing a sticker to steal it.')] });
-    return;
-  }
-
-  const targetMessage = await msg.channel.messages.fetch(msg.reference.messageId).catch(() => null);
-  if (!targetMessage || targetMessage.author.id !== msg.client.user.id) {
-    await msg.reply({ embeds: [errorEmbed('That message was not a sticker sent by this bot.')] });
-    return;
-  }
-
-  const log = await StickerLog.findOne({ messageId: targetMessage.id });
-  if (!log) {
-    await msg.reply({ embeds: [errorEmbed("Couldn't identify a sticker on that message.")] });
-    return;
-  }
-
-  const source = await Sticker.findById(log.stickerId);
-  if (!source) {
-    await msg.reply({ embeds: [errorEmbed('The original sticker no longer exists.')] });
-    return;
-  }
-
-  const requestedName = args[1];
-  const name = requestedName || source.nameDisplay;
-
-  const err = nameError(name);
-  if (err) {
-    await msg.reply({ embeds: [errorEmbed(err)] });
-    return;
-  }
-
-  const count = await Sticker.countDocuments({ ownerId: msg.author.id, guildId: msg.guild.id });
-  if (count >= config.maxStickersPerUser) {
-    await msg.reply({ embeds: [errorEmbed(`You've hit the ${config.maxStickersPerUser}-sticker limit. Delete one first with \`!st delete {name}\`.`)] });
-    return;
-  }
-
-  try {
-    const stolen = await Sticker.create({
-      ownerId: msg.author.id,
-      guildId: msg.guild.id,
-      nameDisplay: name,
-      nameLower: name.toLowerCase(),
-      sourceChannelId: source.sourceChannelId,
-      sourceMessageId: source.sourceMessageId,
-      attachmentIndex: source.attachmentIndex,
-    });
-    await msg.reply(`✅ Added \`${stolen.nameDisplay}\` to your collection.`);
-  } catch (e) {
-    if (e.code === 11000) {
-      await msg.reply({ embeds: [errorEmbed(`You already have a sticker named \`${name}\`. Try \`!st steal {new_name}\` to pick a different one.`)] });
-      return;
-    }
-    throw e;
-  }
-}
-
-// --- !st collection [staff: !st list @user] -----------------------------
+// --- !st collection [@user] -----------------------------------------------
+// Shows the stickers a user has *created* — open to everyone, for any
+// user, since usage is global and this is just attribution now.
 const COLLECTION_PREV_ID = 'sticker_collection_prev';
 const COLLECTION_NEXT_ID = 'sticker_collection_next';
 const COLLECTION_LIFETIME_MS = 5 * 60 * 1000;
 
 /**
- * Resolves each sticker on this page to a live image URL (source
- * messages can move/get deleted, so we re-fetch rather than trust a
- * stored link) and renders it as a masked markdown link on the
- * sticker's name — clicking the name opens the image directly.
- * Stickers whose source can't be resolved show a broken-link marker
- * instead of a dead link.
+ * Resolves each sticker on this page to a live image URL (the archive
+ * post could theoretically be deleted out from under it) and renders it
+ * as a masked markdown link on the sticker's name — clicking the name
+ * opens the image directly. Stickers whose source can't be resolved
+ * show a broken-link marker instead of a dead link.
  */
-async function buildCollectionPage(user, stickers, pageIndex, client) {
+async function buildCollectionPage(user, stickers, pageIndex, client, cap) {
   const pageSize = config.collectionPageSize;
   const totalPages = Math.max(1, Math.ceil(stickers.length / pageSize));
   const pageStickers = stickers.slice(pageIndex * pageSize, pageIndex * pageSize + pageSize);
@@ -292,15 +238,15 @@ async function buildCollectionPage(user, stickers, pageIndex, client) {
     pageStickers.map(async (s) => {
       const attachment = await resolveStickerAttachment(client, s);
       if (!attachment) return `\`${s.nameDisplay}\` ⚠️ *(source missing)*`;
-      return `[\`${s.nameDisplay}\`](${withStickerSize(attachment.url)})`;
+      return `[\`${s.nameDisplay}\`](${attachment.url})`;
     })
   );
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setTitle(`${user.username}'s Stickers (${stickers.length}/${config.maxStickersPerUser})`)
+    .setTitle(`Stickers created by ${user.username} (${stickers.length}/${cap})`)
     .setDescription(
-      lines.length ? lines.join('\n') : 'No stickers saved yet. Use `!st add {name}` to add one.'
+      lines.length ? lines.join('\n') : 'No stickers created yet. Use `!st add {name}` to add one.'
     )
     .setFooter({ text: totalPages > 1 ? `Page ${pageIndex + 1} of ${totalPages}` : `${stickers.length} sticker${stickers.length === 1 ? '' : 's'}` });
 
@@ -327,9 +273,9 @@ function buildCollectionNavRow(pageIndex, totalPages) {
  * collector, mirroring the pattern used for !help — invoker-locked,
  * buttons self-disable after 5 minutes idle.
  */
-async function sendCollection(msg, user, stickers, client) {
+async function sendCollection(msg, user, stickers, client, cap) {
   let pageIndex = 0;
-  const { embed, totalPages } = await buildCollectionPage(user, stickers, pageIndex, client);
+  const { embed, totalPages } = await buildCollectionPage(user, stickers, pageIndex, client, cap);
 
   const sent = await msg.reply({
     embeds: [embed],
@@ -349,7 +295,7 @@ async function sendCollection(msg, user, stickers, client) {
     pageIndex += interaction.customId === COLLECTION_NEXT_ID ? 1 : -1;
     pageIndex = Math.max(0, Math.min(pageIndex, totalPages - 1));
 
-    const page = await buildCollectionPage(user, stickers, pageIndex, client);
+    const page = await buildCollectionPage(user, stickers, pageIndex, client, cap);
     await interaction.update({ embeds: [page.embed], components: [buildCollectionNavRow(pageIndex, totalPages)] });
   });
 
@@ -359,27 +305,35 @@ async function sendCollection(msg, user, stickers, client) {
 }
 
 async function handleCollection(msg, args, client) {
-  const stickers = await Sticker.find({ ownerId: msg.author.id, guildId: msg.guild.id }).sort({ nameLower: 1 });
-  await sendCollection(msg, msg.author, stickers, client);
+  const target = msg.mentions.users.first() || msg.author;
+  const cap = await getStickerCap(msg.guild.id);
+  const stickers = await Sticker.find({ ownerId: target.id, guildId: msg.guild.id }).sort({ nameLower: 1 });
+  await sendCollection(msg, target, stickers, client, cap);
 }
 
-async function handleList(msg, args, client) {
+// --- !st setcap {number} --------------------------------------------------
+// Staff only — overrides the per-creator sticker cap for this guild.
+async function handleSetCap(msg, args) {
   if (!isStaff(msg.member)) {
     await msg.reply({ embeds: [staffEmbed("You don't have permission to use this command.")] });
     return;
   }
 
-  const mentioned = msg.mentions.users.first();
-  if (!mentioned) {
-    await msg.reply({ embeds: [errorEmbed('Usage: `!st list @user`')] });
+  const raw = args[1];
+  const cap = Number(raw);
+  if (!raw || !Number.isInteger(cap) || cap < 1 || cap > 1000) {
+    await msg.reply({ embeds: [errorEmbed('Usage: `!st setcap {number}` — an integer between 1 and 1000.')] });
     return;
   }
 
-  const stickers = await Sticker.find({ ownerId: mentioned.id, guildId: msg.guild.id }).sort({ nameLower: 1 });
-  await sendCollection(msg, mentioned, stickers, client);
+  await setStickerCap(msg.guild.id, cap);
+  await msg.reply({
+    embeds: [new EmbedBuilder().setColor(BRAND_COLOR).setDescription(`✅ Per-creator sticker cap set to **${cap}**.`)],
+  });
 }
 
-// --- !st {name} — send a sticker ----------------------------------------
+// --- !st {name} — send a sticker ------------------------------------------
+// Any sticker in the guild, sent by anyone — usage is global.
 async function handleSend(msg, name, client) {
   const cooldown = checkStickerCooldown(msg.author.id);
   if (cooldown.onCooldown) {
@@ -389,7 +343,7 @@ async function handleSend(msg, name, client) {
     return;
   }
 
-  const sticker = await Sticker.findOne({ ownerId: msg.author.id, guildId: msg.guild.id, nameLower: name.toLowerCase() });
+  const sticker = await Sticker.findOne({ guildId: msg.guild.id, nameLower: name.toLowerCase() });
   if (!sticker) {
     await msg.reply({ embeds: [errorEmbed(`No sticker named \`${name}\` found. Check \`!st collection\`.`)] });
     return;
@@ -399,13 +353,16 @@ async function handleSend(msg, name, client) {
   if (!attachment) {
     sticker.broken = true;
     await sticker.save().catch(() => {});
-    await msg.reply({ embeds: [errorEmbed(`⚠️ The source image for \`${sticker.nameDisplay}\` is missing. Please re-add it with \`!st add\`.`)] });
+    await msg.reply({ embeds: [errorEmbed(`⚠️ The archive copy of \`${sticker.nameDisplay}\` is missing. Ask its creator to \`!st add\` it again.`)] });
     return;
   }
 
+  // No resizing here — the archive post already holds the right-sized
+  // (or, for gifs, original) bytes from add-time. Just link straight to
+  // it.
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setImage(withStickerSize(attachment.url))
+    .setImage(attachment.url)
     .setFooter({ text: `Sent by ${msg.author.username}` });
 
   // If the invocation itself was a reply, forward that context so the
@@ -413,14 +370,12 @@ async function handleSend(msg, name, client) {
   // (often deleted-later) invocation.
   const replyTarget = msg.reference?.messageId;
 
-  const sent = await msg.channel.send({
+  await msg.channel.send({
     embeds: [embed],
     ...(replyTarget ? { reply: { messageReference: replyTarget, failIfNotExists: false } } : {}),
   });
 
   markStickerUsed(msg.author.id);
-
-  await StickerLog.create({ messageId: sent.id, stickerId: sticker._id, guildId: msg.guild.id }).catch(() => {});
 
   if (sticker.broken) {
     sticker.broken = false;
@@ -432,8 +387,7 @@ module.exports = {
   handleAdd,
   handleDelete,
   handleRename,
-  handleSteal,
   handleCollection,
-  handleList,
+  handleSetCap,
   handleSend,
 };
